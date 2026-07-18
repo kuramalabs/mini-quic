@@ -10,6 +10,7 @@ pub type Clients = Arc<Mutex<HashMap<SocketAddr, Instant>>>;
 pub enum MessageType {
     Join,
     Regular,
+    Dropped
 }
 
 impl From<MessageType> for u8 {
@@ -17,6 +18,7 @@ impl From<MessageType> for u8 {
         match value {
             MessageType::Join => 0,
             MessageType::Regular => 1,
+            MessageType::Dropped => 2
         }
     }
 }

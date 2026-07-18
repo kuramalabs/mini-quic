@@ -4,6 +4,7 @@ pub fn decode_message(bytes: &[u8]) -> Result<(MessageType, &[u8]), &str> {
     let msg_type = match bytes.first() {
         Some(0) => MessageType::Join,
         Some(1) => MessageType::Regular,
+        Some(2) => MessageType::Dropped,
         Some(_) => return Err("Unknown message type"),
         None => return Err("Empty packet"),
     };
