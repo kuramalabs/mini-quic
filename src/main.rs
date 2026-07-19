@@ -1,6 +1,6 @@
 mod types;
 
-use mini_quic::{decode_message, encode_message, MessageType};
+use mini_quic::{classify_seq, decode_message, encode_message, MessageType};
 use std::collections::HashMap;
 use std::io::Error;
 use std::sync::Arc;
@@ -26,7 +26,7 @@ async fn main() -> Result<(), Error> {
             let mut dropped = Vec::new();
 
             c1.lock().await.retain(|addr, instant| {
-                let active = instant.elapsed() < Duration::from_secs(10);
+                let active = instant.1.elapsed() < Duration::from_secs(10);
                 if !active {
                     println!("Client with {addr} is dropped");
                     dropped.push(*addr);
@@ -35,7 +35,7 @@ async fn main() -> Result<(), Error> {
             });
 
             for addr in dropped {
-                let msg = encode_message(MessageType::Dropped, b"You are dropped");
+                let msg = encode_message(MessageType::Dropped, b"You are dropped", 0);
                 if let Err(e) = u1.send_to(&msg, addr).await {
                     eprintln!("Could not notify {addr}: {e}");
                 }
@@ -48,13 +48,13 @@ async fn main() -> Result<(), Error> {
         let res = decode_message(&buf[..n]);
 
         match res {
-            Ok((msg_type, bytes)) => {
+            Ok((msg_type, last_seq_no, bytes)) => {
                 match msg_type {
                     MessageType::Join => {
                         if clients
                             .lock()
                             .await
-                            .insert(client_addr, Instant::now())
+                            .insert(client_addr, (last_seq_no, Instant::now()))
                             .is_none()
                         {
                             println!("New client {client_addr} connected");
@@ -67,14 +67,23 @@ async fn main() -> Result<(), Error> {
                             eprintln!("You need to connect via Join first");
                             continue;
                         }
-                        all_clients.insert(client_addr, Instant::now());
+                        //verify the seq_no and log
+                        let stored_seq = all_clients.get(&client_addr).unwrap().0;
+
+                        let seq_status = classify_seq(stored_seq, last_seq_no);
+
+                        // log this
+                        println!("{}", seq_status.info());
+
+                        all_clients.insert(client_addr, (last_seq_no, Instant::now()));
 
                         println!(
-                            "The client {client_addr} sent: {:?}",
-                            String::from_utf8_lossy(bytes)
+                            "The client {client_addr} sent: {:?}, last_seq_no: {}",
+                            String::from_utf8_lossy(bytes),
+                            last_seq_no
                         );
 
-                        let encoded_msg = encode_message(MessageType::Regular, bytes);
+                        let encoded_msg = encode_message(MessageType::Regular, bytes, 0);
 
                         for (addr, _) in all_clients.iter() {
                             if *addr != client_addr {

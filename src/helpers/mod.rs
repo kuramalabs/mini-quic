@@ -1,4 +1,4 @@
-use crate::MessageType;
+use crate::{MessageType, SequenceStatus};
 
 pub fn decode_message(bytes: &[u8]) -> Result<(MessageType, u32, &[u8]), &str> {
     if bytes.len() < 5 {
@@ -17,7 +17,6 @@ pub fn decode_message(bytes: &[u8]) -> Result<(MessageType, u32, &[u8]), &str> {
     Ok((msg_type, seq_no, &bytes[5..]))
 }
 
-
 pub fn encode_message(msg_type: MessageType, payload: &[u8], seq_no: u32) -> Vec<u8> {
     let mut buf = Vec::with_capacity(1 + payload.len());
 
@@ -26,4 +25,15 @@ pub fn encode_message(msg_type: MessageType, payload: &[u8], seq_no: u32) -> Vec
     buf.extend_from_slice(payload);
 
     buf
+}
+
+pub fn classify_seq(last_seq_no: u32, curr_seq_no: u32) -> SequenceStatus {
+    let diff = curr_seq_no as i64 - last_seq_no as i64;
+
+    match diff {
+        0 => SequenceStatus::Duplicate,
+        1 => SequenceStatus::InOrder,
+        n if n > 1 => SequenceStatus::Gap(n as u32),
+        _ => SequenceStatus::LateArrival,
+    }
 }
