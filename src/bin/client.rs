@@ -3,35 +3,63 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::UdpSocket;
 
+struct Sender {
+    client: Arc<UdpSocket>,
+    message_no: u32,
+}
+
+impl Sender {
+    pub async fn new() -> Self {
+        Self {
+            client: Arc::new(UdpSocket::bind("0.0.0.0:0").await.unwrap()),
+            message_no: 0,
+        }
+    }
+
+    pub async fn form_connection(&self) {
+        if let Err(e) = self.client.connect("0.0.0.0:3000").await {
+            println!("Failed to connect to the server: {}", e);
+        }
+    }
+    pub async fn send_message(&mut self, msg: &[u8], is_regular: bool) {
+        self.message_no += 1;
+        let msg_type = match is_regular {
+            true => MessageType::Regular,
+            false => MessageType::Join,
+        };
+        // encode the sequence number
+
+        let msg = encode_message(msg_type, msg, self.message_no);
+        if let Err(e) = self.client.send(&msg).await {
+            println!("Failed to deliver the message to server : {}", e);
+        }
+    }
+}
 #[tokio::main]
 async fn main() {
-    let client = Arc::new(UdpSocket::bind("0.0.0.0:0").await.unwrap());
+    let mut sender = Sender::new().await;
+    sender.form_connection().await;
 
-    // connect this with the real udp server running
-    client.connect("0.0.0.0:3000").await.unwrap();
+    let c1 = sender.client.clone();
 
-    //now can directly use the send and the recv
-    let c1 = client.clone();
     tokio::spawn(async move {
         let mut buf = vec![0; 256];
         loop {
             let r = c1.recv(&mut buf).await.unwrap();
-            // gotta decode this message
             let msg = decode_message(&buf[..r]).unwrap();
-
-            // this will be Regular one as there is no chance the task will receive the
-            // Join as this functionality is not there in the server yet
-
-            println!("Received: {}", String::from_utf8_lossy(msg.1));
+            println!(
+                "Received: Seq Number: {}, Message: {}",
+                msg.1,
+                String::from_utf8_lossy(msg.2)
+            );
         }
     });
 
+    sender.send_message(b"", false).await;
+    println!("Join message sent");
+
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin);
-
-    let join_msg = encode_message(MessageType::Join, b"");
-    client.send(&join_msg).await.unwrap();
-    println!("Join message sent");
 
     loop {
         let mut line = String::new();
@@ -42,10 +70,6 @@ async fn main() {
         if msg.is_empty() {
             continue;
         }
-
-        // encode it and send
-        let msg = encode_message(MessageType::Regular, msg.as_bytes());
-        client.send(&msg).await.unwrap();
-        
+        sender.send_message(msg.as_bytes(), true).await;
     }
 }
