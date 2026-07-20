@@ -6,11 +6,12 @@ use tokio::time::Instant;
 
 pub type Clients = Arc<Mutex<HashMap<SocketAddr, (u32, Instant)>>>;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum MessageType {
     Join,
     Regular,
     Dropped,
+    Ack,
 }
 
 impl From<MessageType> for u8 {
@@ -19,6 +20,7 @@ impl From<MessageType> for u8 {
             MessageType::Join => 0,
             MessageType::Regular => 1,
             MessageType::Dropped => 2,
+            MessageType::Ack => 3,
         }
     }
 }

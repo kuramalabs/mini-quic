@@ -11,6 +11,7 @@ pub fn decode_message(bytes: &[u8]) -> Result<(MessageType, u32, &[u8]), &str> {
         0 => MessageType::Join,
         1 => MessageType::Regular,
         2 => MessageType::Dropped,
+        3 => MessageType::Ack,
         _ => return Err("Unknown message type"),
     };
 
@@ -18,7 +19,7 @@ pub fn decode_message(bytes: &[u8]) -> Result<(MessageType, u32, &[u8]), &str> {
 }
 
 pub fn encode_message(msg_type: MessageType, payload: &[u8], seq_no: u32) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(1 + payload.len());
+    let mut buf = Vec::with_capacity(5 + payload.len());
 
     buf.extend_from_slice(&seq_no.to_be_bytes());
     buf.extend_from_slice(&u8::from(msg_type).to_be_bytes());

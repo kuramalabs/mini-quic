@@ -1,6 +1,6 @@
 mod types;
 
-use mini_quic::{classify_seq, decode_message, encode_message, MessageType};
+use mini_quic::{classify_seq, decode_message, encode_message, MessageType, SequenceStatus};
 use std::collections::HashMap;
 use std::io::Error;
 use std::sync::Arc;
@@ -75,20 +75,72 @@ async fn main() -> Result<(), Error> {
                         // log this
                         println!("{}", seq_status.info());
 
-                        all_clients.insert(client_addr, (curr_seq_no, Instant::now()));
+                        match seq_status {
+                            SequenceStatus::InOrder => {
+                                // this is good
+                                println!(
+                                    "The client {client_addr} sent: {:?}, curr_seq_no: {}",
+                                    String::from_utf8_lossy(bytes),
+                                    curr_seq_no
+                                );
 
-                        println!(
-                            "The client {client_addr} sent: {:?}, curr_seq_no: {}",
-                            String::from_utf8_lossy(bytes),
-                            curr_seq_no
-                        );
+                                all_clients.insert(client_addr, (curr_seq_no, Instant::now()));
 
-                        let encoded_msg = encode_message(MessageType::Regular, bytes, curr_seq_no);
+                                let encoded_msg =
+                                    encode_message(MessageType::Regular, bytes, curr_seq_no);
+                                for (addr, _) in all_clients.iter() {
+                                    if *addr != client_addr {
+                                        if let Err(e) = udp_socket.send_to(&encoded_msg, addr).await
+                                        {
+                                            println!("Could not send to: {addr}, Error: {e}");
+                                        }
+                                    }
+                                }
 
-                        for (addr, _) in all_clients.iter() {
-                            if *addr != client_addr {
-                                if let Err(e) = udp_socket.send_to(&encoded_msg, addr).await {
-                                    println!("Could not send to: {addr}, Error: {e}");
+                                let msg = encode_message(MessageType::Ack, b"", curr_seq_no);
+                                if let Err(e) = udp_socket.send_to(&msg, client_addr).await {
+                                    println!(
+                                        " Error sending ack to client : {} for seq_no: {}",
+                                        client_addr, curr_seq_no
+                                    );
+                                }
+                            }
+                            SequenceStatus::Duplicate => {
+                                println!(
+                                    "Duplicate seq no: {} detected from client: {}",
+                                    curr_seq_no, client_addr
+                                );
+                                // should tell the client that it is safe to eject the curr seq number is
+                                // of no use .. so we can eject it
+
+                                let msg = encode_message(MessageType::Ack, b"", curr_seq_no);
+                                if let Err(e) = udp_socket.send_to(&msg, client_addr).await {
+                                    println!(
+                                        " Error sending ack to client : {} for seq_no: {}",
+                                        client_addr, curr_seq_no
+                                    );
+                                }
+                            }
+                            SequenceStatus::Gap(gap) => {
+                                println!(" Gap Detected between client and server: {}", gap);
+                                // do not send the ack.. will send only in the case of the Inorder
+                                // and also in case of duplicate
+                            }
+                            SequenceStatus::LateArrival => {
+                                println!(
+                                    " This seq no: {} is a late arrival from client :{}",
+                                    curr_seq_no, client_addr
+                                );
+                                // this case is very particular .. maybe I will never hit it.
+                                // How about blocking client side unless there is ack for the latest send
+                                // lets see, lets see
+                                // send ack but
+                                let msg = encode_message(MessageType::Ack, b"", curr_seq_no);
+                                if let Err(e) = udp_socket.send_to(&msg, client_addr).await {
+                                    println!(
+                                        " Error sending ack to client : {} for seq_no: {}",
+                                        client_addr, curr_seq_no
+                                    );
                                 }
                             }
                         }
