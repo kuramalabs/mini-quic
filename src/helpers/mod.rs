@@ -27,8 +27,8 @@ pub fn encode_message(msg_type: MessageType, payload: &[u8], seq_no: u32) -> Vec
     buf
 }
 
-pub fn classify_seq(last_seq_no: u32, curr_seq_no: u32) -> SequenceStatus {
-    let diff = curr_seq_no as i64 - last_seq_no as i64;
+pub fn classify_seq(stored_seq: u32, curr_seq_no: u32) -> SequenceStatus {
+    let diff = curr_seq_no as i64 - stored_seq as i64;
 
     match diff {
         0 => SequenceStatus::Duplicate,

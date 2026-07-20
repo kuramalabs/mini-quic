@@ -29,15 +29,15 @@ async fn main() -> Result<(), Error> {
                 let active = instant.1.elapsed() < Duration::from_secs(10);
                 if !active {
                     println!("Client with {addr} is dropped");
-                    dropped.push(*addr);
+                    dropped.push((*addr, instant.0));
                 }
                 active
             });
 
             for addr in dropped {
-                let msg = encode_message(MessageType::Dropped, b"You are dropped", 0);
-                if let Err(e) = u1.send_to(&msg, addr).await {
-                    eprintln!("Could not notify {addr}: {e}");
+                let msg = encode_message(MessageType::Dropped, b"You are dropped", addr.1);
+                if let Err(e) = u1.send_to(&msg, addr.0).await {
+                    eprintln!("Could not notify {}: {e}", addr.0);
                 }
             }
         }
@@ -48,13 +48,13 @@ async fn main() -> Result<(), Error> {
         let res = decode_message(&buf[..n]);
 
         match res {
-            Ok((msg_type, last_seq_no, bytes)) => {
+            Ok((msg_type, curr_seq_no, bytes)) => {
                 match msg_type {
                     MessageType::Join => {
                         if clients
                             .lock()
                             .await
-                            .insert(client_addr, (last_seq_no, Instant::now()))
+                            .insert(client_addr, (curr_seq_no, Instant::now()))
                             .is_none()
                         {
                             println!("New client {client_addr} connected");
@@ -70,20 +70,20 @@ async fn main() -> Result<(), Error> {
                         //verify the seq_no and log
                         let stored_seq = all_clients.get(&client_addr).unwrap().0;
 
-                        let seq_status = classify_seq(stored_seq, last_seq_no);
+                        let seq_status = classify_seq(stored_seq, curr_seq_no);
 
                         // log this
                         println!("{}", seq_status.info());
 
-                        all_clients.insert(client_addr, (last_seq_no, Instant::now()));
+                        all_clients.insert(client_addr, (curr_seq_no, Instant::now()));
 
                         println!(
-                            "The client {client_addr} sent: {:?}, last_seq_no: {}",
+                            "The client {client_addr} sent: {:?}, curr_seq_no: {}",
                             String::from_utf8_lossy(bytes),
-                            last_seq_no
+                            curr_seq_no
                         );
 
-                        let encoded_msg = encode_message(MessageType::Regular, bytes, 0);
+                        let encoded_msg = encode_message(MessageType::Regular, bytes, curr_seq_no);
 
                         for (addr, _) in all_clients.iter() {
                             if *addr != client_addr {
