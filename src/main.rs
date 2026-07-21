@@ -1,14 +1,14 @@
-mod types;
 
-use mini_quic::{classify_seq, decode_message, encode_message, MessageType, SequenceStatus};
+use mini_quic::{
+    classify_seq, decode_message, encode_message, send_ack_empty, MessageType, SequenceStatus,Clients
+};
 use std::collections::HashMap;
 use std::io::Error;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
-use tokio::time;
-use tokio::time::{Duration, Instant};
-use types::Clients;
+use tokio::time::{self, Duration, Instant};
+
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -19,25 +19,29 @@ async fn main() -> Result<(), Error> {
 
     let c1 = clients.clone();
     let u1 = udp_socket.clone();
+
     tokio::spawn(async move {
         loop {
-            time::sleep(Duration::from_secs(5)).await;
-
+            time::sleep(Duration::from_secs(10)).await;
             let mut dropped = Vec::new();
 
-            c1.lock().await.retain(|addr, instant| {
-                let active = instant.1.elapsed() < Duration::from_secs(10);
+            c1.lock().await.retain(|addr, (seq, instant)| {
+                let active = instant.elapsed() < Duration::from_secs(10);
                 if !active {
                     println!("Client with {addr} is dropped");
-                    dropped.push((*addr, instant.0));
+                    dropped.push((*addr, *seq));
                 }
                 active
             });
 
-            for addr in dropped {
-                let msg = encode_message(MessageType::Dropped, b"You are dropped", addr.1);
-                if let Err(e) = u1.send_to(&msg, addr.0).await {
-                    eprintln!("Could not notify {}: {e}", addr.0);
+            for (addr, seq) in dropped {
+                let msg = encode_message(
+                    MessageType::Dropped,
+                    b"You are dropped due to inactivity",
+                    seq,
+                );
+                if let Err(e) = u1.send_to(&msg, addr).await {
+                    eprintln!("Could not notify {}: {e}", addr);
                 }
             }
         }
@@ -64,7 +68,7 @@ async fn main() -> Result<(), Error> {
                     MessageType::Regular => {
                         let mut all_clients = clients.lock().await;
                         if !all_clients.contains_key(&client_addr) {
-                            eprintln!("You need to connect via Join first");
+                            eprintln!("Try restarting the client");
                             continue;
                         }
                         //verify the seq_no and log
@@ -89,21 +93,24 @@ async fn main() -> Result<(), Error> {
                                 let encoded_msg =
                                     encode_message(MessageType::Regular, bytes, curr_seq_no);
                                 for (addr, _) in all_clients.iter() {
-                                    if *addr != client_addr {
-                                        if let Err(e) = udp_socket.send_to(&encoded_msg, addr).await
-                                        {
-                                            println!("Could not send to: {addr}, Error: {e}");
-                                        }
+                                    if *addr != client_addr
+                                        && let Err(e) = udp_socket.send_to(&encoded_msg, addr).await
+                                    {
+                                        println!("Could not send to: {addr}, Error: {e}");
                                     }
                                 }
 
-                                let msg = encode_message(MessageType::Ack, b"", curr_seq_no);
-                                if let Err(e) = udp_socket.send_to(&msg, client_addr).await {
-                                    println!(
+                                send_ack_empty(
+                                    udp_socket.clone(),
+                                    client_addr,
+                                    curr_seq_no,
+                                    format!(
                                         " Error sending ack to client : {} for seq_no: {}",
                                         client_addr, curr_seq_no
-                                    );
-                                }
+                                    )
+                                    .as_str(),
+                                )
+                                .await
                             }
                             SequenceStatus::Duplicate => {
                                 println!(
@@ -113,13 +120,17 @@ async fn main() -> Result<(), Error> {
                                 // should tell the client that it is safe to eject the curr seq number is
                                 // of no use .. so we can eject it
 
-                                let msg = encode_message(MessageType::Ack, b"", curr_seq_no);
-                                if let Err(e) = udp_socket.send_to(&msg, client_addr).await {
-                                    println!(
-                                        " Error sending ack to client : {} for seq_no: {}",
+                                send_ack_empty(
+                                    udp_socket.clone(),
+                                    client_addr,
+                                    curr_seq_no,
+                                    format!(
+                                        "Error sending ack to client : {} for seq_no: {}",
                                         client_addr, curr_seq_no
-                                    );
-                                }
+                                    )
+                                    .as_str(),
+                                )
+                                .await
                             }
                             SequenceStatus::Gap(gap) => {
                                 println!(" Gap Detected between client and server: {}", gap);
@@ -135,13 +146,18 @@ async fn main() -> Result<(), Error> {
                                 // How about blocking client side unless there is ack for the latest send
                                 // lets see, lets see
                                 // send ack but
-                                let msg = encode_message(MessageType::Ack, b"", curr_seq_no);
-                                if let Err(e) = udp_socket.send_to(&msg, client_addr).await {
-                                    println!(
+
+                                send_ack_empty(
+                                    udp_socket.clone(),
+                                    client_addr,
+                                    curr_seq_no,
+                                    format!(
                                         " Error sending ack to client : {} for seq_no: {}",
                                         client_addr, curr_seq_no
-                                    );
-                                }
+                                    )
+                                    .as_str(),
+                                )
+                                .await
                             }
                         }
                     }

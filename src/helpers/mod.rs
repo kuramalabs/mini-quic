@@ -1,4 +1,7 @@
 use crate::{MessageType, SequenceStatus};
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::net::UdpSocket;
 
 pub fn decode_message(bytes: &[u8]) -> Result<(MessageType, u32, &[u8]), &str> {
     if bytes.len() < 5 {
@@ -36,5 +39,19 @@ pub fn classify_seq(stored_seq: u32, curr_seq_no: u32) -> SequenceStatus {
         1 => SequenceStatus::InOrder,
         n if n > 1 => SequenceStatus::Gap(n as u32),
         _ => SequenceStatus::LateArrival,
+    }
+}
+
+pub async fn send_ack_empty(
+    udp_socket: Arc<UdpSocket>,
+    client_addr: SocketAddr,
+    curr_seq_no: u32,
+    log: &str,
+) {
+    // tokio::time::sleep(Duration::from_secs(3)).await;
+    // this timer sleep was here to simulate the delay between acks to test retransmission
+    let msg = encode_message(MessageType::Ack, b"", curr_seq_no);
+    if let Err(e) = udp_socket.send_to(&msg, client_addr).await {
+        println!("{}, Error: {}", log, e);
     }
 }
