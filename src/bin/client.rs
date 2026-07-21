@@ -22,7 +22,7 @@ impl PendingMessage {
 struct Sender {
     client: Arc<UdpSocket>,
     message_no: u32,
-    pending: HashMap<u32, PendingMessage>,
+    smoothed_rtt: f64,
 }
 
 impl Sender {
@@ -30,10 +30,9 @@ impl Sender {
         Self {
             client: Arc::new(UdpSocket::bind("0.0.0.0:0").await.unwrap()),
             message_no: 0,
-            pending: HashMap::new(),
+            smoothed_rtt: 333f64,
         }
     }
-
     pub async fn form_connection(&self) {
         if let Err(e) = self.client.connect("0.0.0.0:3000").await {
             println!("Failed to connect to the server: {}", e);
@@ -89,7 +88,14 @@ async fn main() {
                         MessageType::Ack => {
                             // eject the seq number received from the server
                             match p1.lock().await.remove(&msg.1) {
-                                Some(_) => {
+                                Some(pending_msg) => {
+                                    let sample = pending_msg.sent_at.elapsed().as_secs_f64();
+                                    sender.smoothed_rtt =
+                                        0.875 * sender.smoothed_rtt + 0.125 * sample;
+                                    println!(
+                                        "RTT updated: {:.4}s | smoothed: {:.4}s",
+                                        sample, sender.smoothed_rtt
+                                    );
                                     println!("Removed the seq_no {} as ack received.", msg.1)
                                 }
                                 None => {
@@ -122,7 +128,6 @@ async fn main() {
             tokio::time::sleep(Duration::from_secs(5)).await;
 
             // push all the packets in the pending to the server
-
             let to_retransmit: Vec<Vec<u8>> = {
                 let all_messages = p2.lock().await;
                 all_messages
@@ -131,9 +136,11 @@ async fn main() {
                     .map(|m| m.encoded.clone())
                     .collect()
             };
+
             for encoded in to_retransmit {
                 // send the message again
                 if let Err(e) = c2.send(&encoded).await {
+                    println!("{}", sender.smoothed_rtt);
                     println!("Retransmit failed : {}", e);
                 }
             }
