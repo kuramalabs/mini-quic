@@ -7,27 +7,34 @@ use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
+const MAX_RETRIES: u32 = 5;
+
 // need something to track ack based messages
 struct PendingMessage {
     encoded: Vec<u8>,
     sent_at: Instant,
+    retries: u32,
 }
 
 /**
-    A single RTT sample is noisy - one packet might get delayed by a busy CPU, a network hiccup, whatever.
-    So we don't use the raw sample directly. EWMA smooths it out
-    0.875 = weight on history (7/8 of the old value survives).
-    0.125 = weight on new sample (only 1/8 influence per update).
+A single RTT sample is noisy - one packet might get delayed by a busy CPU, a network hiccup, whatever.
+So we don't use the raw sample directly. EWMA smooths it out
+0.875 = weight on history (7/8 of the old value survives).
+0.125 = weight on new sample (only 1/8 influence per update).
 
-    Every time a new RTT sample arrives, you keep 87.5% of what you already believed,
-    and let the new measurement influence only 12.5% of the result
+Every time a new RTT sample arrives, you keep 87.5% of what you already believed,
+and let the new measurement influence only 12.5% of the result
 */
 type SmoothedRtt = Arc<Mutex<f64>>;
 
 type Pending = Arc<Mutex<HashMap<u32, PendingMessage>>>;
 impl PendingMessage {
     pub fn new(encoded: Vec<u8>, sent_at: Instant) -> Self {
-        Self { encoded, sent_at }
+        Self {
+            encoded,
+            sent_at,
+            retries: 0,
+        }
     }
 }
 struct Sender {
@@ -149,14 +156,26 @@ async fn main() {
             };
 
             // push all the packets in the pending to the server
-            let to_retransmit: Vec<Vec<u8>> = {
-                let all_messages = p2.lock().await;
-                all_messages
-                    .values()
-                    .filter(|m| m.sent_at.elapsed() > timeout)
-                    .map(|m| m.encoded.clone())
-                    .collect()
-            };
+            let mut to_retransmit = Vec::new();
+            let mut to_remove = Vec::new();
+
+            {
+                let mut all_messages = p2.lock().await;
+                for (seq, msg) in all_messages.iter_mut() {
+                    if msg.sent_at.elapsed() > timeout {
+                        if msg.retries >= MAX_RETRIES {
+                            to_remove.push(*seq);
+                        } else {
+                            msg.retries += 1;
+                            to_retransmit.push(msg.encoded.clone());
+                        }
+                    }
+                }
+                for seq in to_remove {
+                    all_messages.remove(&seq);
+                    println!("Gave up on seq_no: {} after {} retries", seq, MAX_RETRIES);
+                }
+            }
 
             for encoded in to_retransmit {
                 // send the message again
