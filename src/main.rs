@@ -1,6 +1,6 @@
-
 use mini_quic::{
-    classify_seq, decode_message, encode_message, send_ack_empty, MessageType, SequenceStatus,Clients
+    classify_seq, decode_message, encode_message, send_ack_empty, Clients, MessageType,
+    SequenceStatus,
 };
 use std::collections::HashMap;
 use std::io::Error;
@@ -8,7 +8,6 @@ use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
 use tokio::time::{self, Duration, Instant};
-
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -161,7 +160,6 @@ async fn main() -> Result<(), Error> {
                             }
                         }
                     }
-
                     _ => {}
                 }
             }

@@ -13,6 +13,17 @@ struct PendingMessage {
     sent_at: Instant,
 }
 
+/**
+    A single RTT sample is noisy - one packet might get delayed by a busy CPU, a network hiccup, whatever.
+    So we don't use the raw sample directly. EWMA smooths it out
+    0.875 = weight on history (7/8 of the old value survives).
+    0.125 = weight on new sample (only 1/8 influence per update).
+
+    Every time a new RTT sample arrives, you keep 87.5% of what you already believed,
+    and let the new measurement influence only 12.5% of the result
+*/
+type SmoothedRtt = Arc<Mutex<f64>>;
+
 type Pending = Arc<Mutex<HashMap<u32, PendingMessage>>>;
 impl PendingMessage {
     pub fn new(encoded: Vec<u8>, sent_at: Instant) -> Self {
@@ -22,7 +33,6 @@ impl PendingMessage {
 struct Sender {
     client: Arc<UdpSocket>,
     message_no: u32,
-    smoothed_rtt: f64,
 }
 
 impl Sender {
@@ -30,7 +40,6 @@ impl Sender {
         Self {
             client: Arc::new(UdpSocket::bind("0.0.0.0:0").await.unwrap()),
             message_no: 0,
-            smoothed_rtt: 333f64,
         }
     }
     pub async fn form_connection(&self) {
@@ -70,6 +79,10 @@ async fn main() {
 
     let pending: Pending = Pending::new(Mutex::new(HashMap::new()));
 
+    let smoothed_rtt: SmoothedRtt = Arc::new(Mutex::new(0.333));
+    let rtt1 = smoothed_rtt.clone();
+    let rtt2 = smoothed_rtt.clone();
+
     let c1 = sender.client.clone();
 
     let p1 = pending.clone();
@@ -90,12 +103,15 @@ async fn main() {
                             match p1.lock().await.remove(&msg.1) {
                                 Some(pending_msg) => {
                                     let sample = pending_msg.sent_at.elapsed().as_secs_f64();
-                                    sender.smoothed_rtt =
-                                        0.875 * sender.smoothed_rtt + 0.125 * sample;
+
+                                    let mut rtt = rtt1.lock().await;
+                                    *rtt = 0.875 * *rtt + 0.125 * sample;
+
                                     println!(
                                         "RTT updated: {:.4}s | smoothed: {:.4}s",
-                                        sample, sender.smoothed_rtt
+                                        sample, *rtt
                                     );
+
                                     println!("Removed the seq_no {} as ack received.", msg.1)
                                 }
                                 None => {
@@ -127,12 +143,17 @@ async fn main() {
         loop {
             tokio::time::sleep(Duration::from_secs(5)).await;
 
+            let timeout = {
+                let rtt = rtt2.lock().await;
+                Duration::from_secs_f64(*rtt * 2.0) // 2x is retransmission timeout
+            };
+
             // push all the packets in the pending to the server
             let to_retransmit: Vec<Vec<u8>> = {
                 let all_messages = p2.lock().await;
                 all_messages
                     .values()
-                    .filter(|m| m.sent_at.elapsed() > Duration::from_secs(5))
+                    .filter(|m| m.sent_at.elapsed() > timeout)
                     .map(|m| m.encoded.clone())
                     .collect()
             };
@@ -140,7 +161,6 @@ async fn main() {
             for encoded in to_retransmit {
                 // send the message again
                 if let Err(e) = c2.send(&encoded).await {
-                    println!("{}", sender.smoothed_rtt);
                     println!("Retransmit failed : {}", e);
                 }
             }
