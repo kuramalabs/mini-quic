@@ -8,3 +8,12 @@
 - [x] Sequence numbers
 - [x] ACKs
 - [x] Retransmission timer
+
+## Phase 2: Reliability & Congestion Control
+
+- [ ] RTT estimation (round-trip time)
+- [ ] Adaptive retransmit timeout (replace hardcoded 5s with estimated RTT × multiplier)
+- [ ] Max retry limit
+- [ ] Congestion window (limit how many unacked packets can be in-flight at once)
+- [ ] Slow start (grow window on successful ACKs)
+- [ ] Congestion avoidance (back off window on loss/timeout detection)
