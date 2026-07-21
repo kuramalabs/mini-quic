@@ -4,7 +4,7 @@
 
 - [x] UDP echo server (receive from anyone, send back to that addr)
 - [x] Track connected/active senders
-- [ ] Handle out-of-order / duplicate packets (observe first, then fix)
-- [ ] Sequence numbers
-- [ ] ACKs
-- [ ] Retransmission timer
+- [x] Handle out-of-order / duplicate / late arrival packets
+- [x] Sequence numbers
+- [x] ACKs
+- [x] Retransmission timer

@@ -1,6 +1,7 @@
 use mini_quic::{decode_message, encode_message, MessageType};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
@@ -71,39 +72,75 @@ async fn main() {
     let pending: Pending = Pending::new(Mutex::new(HashMap::new()));
 
     let c1 = sender.client.clone();
+
     let p1 = pending.clone();
+
+    // task to receive server messages
     tokio::spawn(async move {
         let mut buf = vec![0; 256];
         loop {
-            let r = c1.recv(&mut buf).await.unwrap();
-            let msg = decode_message(&buf[..r]).unwrap();
-
-            match msg.0 {
-                MessageType::Regular => {
-                    println!(
-                        "Received: Seq Number: {}, Message: {}",
-                        msg.1,
-                        String::from_utf8_lossy(msg.2)
-                    );
-                }
-                MessageType::Ack => {
-                    // eject the seq number received from the server
-                    match p1.lock().await.remove(&msg.1) {
-                        Some(_) => {
-                            println!("Removed the seq_no {} as ack received.", msg.1)
+            match c1.recv(&mut buf).await {
+                Ok(r) => {
+                    let msg = decode_message(&buf[..r]).unwrap();
+                    match msg.0 {
+                        MessageType::Regular => {
+                            println!("Received: Message: {}", String::from_utf8_lossy(msg.2));
                         }
-                        None => {
-                            println!("Seq number not found")
+                        MessageType::Ack => {
+                            // eject the seq number received from the server
+                            match p1.lock().await.remove(&msg.1) {
+                                Some(_) => {
+                                    println!("Removed the seq_no {} as ack received.", msg.1)
+                                }
+                                None => {
+                                    println!("Seq number not found")
+                                }
+                            }
+                        }
+                        MessageType::Dropped => {
+                            println!("{}", String::from_utf8_lossy(msg.2))
+                        }
+                        _ => {
+                            todo!()
                         }
                     }
                 }
-                _ => {
-                    todo!()
+                Err(e) => {
+                    println!("{}", e);
+                    break;
                 }
             }
         }
     });
 
+    // spawn a new task for retransmission of pending ack messages
+    let c2 = sender.client.clone();
+    let p2 = pending.clone();
+
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+
+            // push all the packets in the pending to the server
+
+            let to_retransmit: Vec<Vec<u8>> = {
+                let all_messages = p2.lock().await;
+                all_messages
+                    .values()
+                    .filter(|m| m.sent_at.elapsed() > Duration::from_secs(5))
+                    .map(|m| m.encoded.clone())
+                    .collect()
+            };
+            for encoded in to_retransmit {
+                // send the message again
+                if let Err(e) = c2.send(&encoded).await {
+                    println!("Retransmit failed : {}", e);
+                }
+            }
+        }
+    });
+
+    //send a join message here
     sender.send_message(b"", false, pending.clone()).await;
     println!("Join message sent");
 
